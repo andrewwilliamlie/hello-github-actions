@@ -187,7 +187,10 @@ export async function createReferralShare(tx: Tx, base: CommissionEvent, actor: 
       lines: [dr("AGENT_PENDING", calc.amount, { agentId: base.agentId, commissionEventId: base.id }), cr("COMMISSION_EXPENSE", calc.amount, { commissionEventId: base.id })],
     });
   }
-  await notifyUser(tx, referral.referrer.userId, "referral.earned", { amount: formatRupiah(calc.amount), recruit: referral.recruit.fullName }, "/agent/referrals");
+  // Per-transaction referral shares are tiny and frequent; they are summarized by the "payable" notice instead.
+  if (refType === "REFERRAL_SALES") {
+    await notifyUser(tx, referral.referrer.userId, "referral.earned", { amount: formatRupiah(calc.amount), recruit: referral.recruit.fullName }, "/agent/referrals");
+  }
   return event;
 }
 
