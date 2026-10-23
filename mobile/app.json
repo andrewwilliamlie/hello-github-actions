@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Hausjo Agent",
+    "slug": "hausjo-agent-network",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.hausjo.agentnetwork"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0B1B42",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.hausjo.agentnetwork"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sharing",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain",
+          "backgroundColor": "#0B1B42"
+        }
+      ]
+    ],
+    "scheme": "hausjo",
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}

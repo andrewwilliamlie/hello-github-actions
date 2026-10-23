@@ -61,11 +61,18 @@ npm run worker                     # second terminal: jobs, commission release, 
 
 The seed also prints a demo **API key** and **webhook secret** for the `DEMO_PROCESSOR` source.
 
+## Mobile app (Expo Go)
+
+`mobile/` contains an Expo (SDK 58) app that wraps the portal for phones — try it with **Expo Go**:
+run `npm run dev:lan` here, then `cd mobile && npm install && npx expo start` and scan the QR code.
+Details in [mobile/README.md](mobile/README.md).
+
 ## Scripts
 
 | Command | Purpose |
 |---|---|
 | `npm run dev` / `build` / `start` | Next.js |
+| `npm run dev:lan` | Dev server reachable from phones on the same Wi-Fi (for Expo Go / phone browser) |
 | `npm run worker` | Background worker (job queue + scheduler) |
 | `npm run db:migrate` / `db:seed` / `db:reset` | Database |
 | `npm test` | Unit + integration tests (uses `hausjo_test`; see docs/setup.md) |
@@ -97,7 +104,8 @@ src/app/             (public) landing/register/login · agent/ · admin/ · merc
 src/server/          domain services (modules/), ledger, rule engine, auth, RBAC, jobs, storage, notifications, API router
 src/components/      UI primitives, layout, charts, shared widgets
 src/lib/             money (bigint), time (WIB), i18n dictionaries, helpers
-scripts/             worker, TOTP helper
+scripts/             worker, TOTP helper, LAN dev server
+mobile/              Expo app (WebView shell for Expo Go)
 tests/               unit/, integration/ (real Postgres), e2e/ (Playwright)
 ```
 

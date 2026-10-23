@@ -2,9 +2,10 @@
   "name": "hausjo-agent-network",
   "version": "0.1.0",
   "private": true,
-  "description": "HAUSJO AGENT NETWORK — agent recruitment, EDC sales, merchant onboarding, commissions and payouts for PT Hausjo Digital Pro",
+  "description": "HAUSJO AGENT NETWORK \u2014 agent recruitment, EDC sales, merchant onboarding, commissions and payouts for PT Hausjo Digital Pro",
   "scripts": {
     "dev": "next dev -p 3000",
+    "dev:lan": "node scripts/dev-lan.mjs",
     "build": "next build",
     "start": "next start -p ${PORT:-3000}",
     "worker": "tsx scripts/worker.ts",

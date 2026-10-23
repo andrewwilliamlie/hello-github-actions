@@ -23,6 +23,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Dev only: let phones on the LAN (Expo Go / phone browser) load dev resources. Set by `npm run dev:lan`.
+  allowedDevOrigins: (process.env.ALLOWED_DEV_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   poweredByHeader: false,
   serverExternalPackages: ["@node-rs/argon2", "exceljs"],
   experimental: { serverActions: { bodySizeLimit: "12mb" } },
