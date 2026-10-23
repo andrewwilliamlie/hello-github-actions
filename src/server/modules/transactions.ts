@@ -180,7 +180,8 @@ async function ingestOne(source: string, channel: string, n: NormalizedTransacti
 export async function ingestTransactions(actor: Actor, source: string, items: unknown[], channel: "API" | "WEBHOOK" | "IMPORT" | "SEED_DEMO", opts: { importId?: string } = {}): Promise<IngestResult[]> {
   if (actor.kind === "api") {
     if (actor.apiSource !== source) throw new AppError("FORBIDDEN", "API key tidak berhak menulis sumber ini.");
-  } else requirePermission(actor, "transaction.ingest");
+  } else requirePermission(actor, channel === "IMPORT" ? "import.manage" : "transaction.ingest");
+  if (!Array.isArray(items)) throw invalid("Daftar transaksi harus berupa array.");
   if (!/^[A-Z0-9_]{2,40}$/.test(source)) throw invalid("Kode sumber tidak valid.");
   if (items.length > 5000) throw invalid("Maksimal 5000 transaksi per permintaan.");
   const out: IngestResult[] = [];
@@ -207,7 +208,8 @@ export const settlementSchema = z.object({
 export async function ingestSettlements(actor: Actor, source: string, items: unknown[], opts: { importId?: string } = {}) {
   if (actor.kind === "api") {
     if (actor.apiSource !== source) throw new AppError("FORBIDDEN", "API key tidak berhak menulis sumber ini.");
-  } else requirePermission(actor, "transaction.ingest");
+  } else requirePermission(actor, opts.importId ? "import.manage" : "transaction.ingest");
+  if (!Array.isArray(items)) throw invalid("Daftar settlement harus berupa array.");
   const out: { settlementRef: string; result: "CREATED" | "DUPLICATE" | "CONFLICT" | "REJECTED"; errors?: string[] }[] = [];
   for (const raw of items) {
     const p = settlementSchema.safeParse(raw);
