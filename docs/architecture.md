@@ -118,7 +118,7 @@ Reversal of an event uses its net amount: from `AGENT_PENDING` if not yet payabl
 * **Auth**: email/phone + password (Argon2id), opaque session token (SHA-256 at rest), httpOnly `SameSite=Lax` `Secure` cookie, 12 h absolute / 2 h idle. Admin roles require TOTP MFA. Account lockout + DB-backed rate limits.
 * **Authorization**: permission matrix in `src/server/rbac.ts`; object-level checks in services (agents only see their own merchants/earnings; merchants only their own data).
 * **Audit**: every state change writes `AuditLog` (append-only, redacted).
-* **Background jobs**: `Job` table, `FOR UPDATE SKIP LOCKED`, exponential backoff, `DEAD` after max attempts. Scheduler in `scripts/worker.ts`: commission release every 15 min, reconciliation daily 02:00 WIB.
+* **Background jobs**: `Job` table, `FOR UPDATE SKIP LOCKED`, exponential backoff, `DEAD` after max attempts. Scheduler in `scripts/worker.ts`: commission release every 15 min, reconciliation daily 02:00 WIB (previous day), rate-limit pruning daily.
 * **Adapters**: every external integration has an interface + `Mock*` implementation; mocks are labeled in the UI and refused in production unless `ALLOW_MOCK_PROVIDERS=true`.
 * **i18n**: `src/lib/i18n` dictionaries (`id`, `en`).
 
