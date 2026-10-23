@@ -23,7 +23,6 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  output: "standalone",
   poweredByHeader: false,
   serverExternalPackages: ["@node-rs/argon2", "exceljs"],
   experimental: { serverActions: { bodySizeLimit: "12mb" } },

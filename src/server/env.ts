@@ -18,6 +18,7 @@ const schema = z.object({
   S3_ACCESS_KEY_ID: z.string().optional(),
   S3_SECRET_ACCESS_KEY: z.string().optional(),
   S3_FORCE_PATH_STYLE: bool,
+  S3_SSE: z.enum(["AES256", "aws:kms", "none"]).default("AES256"), // server-side encryption; "none" for MinIO without KMS
   SMS_PROVIDER: z.enum(["mock"]).default("mock"),
   EMAIL_PROVIDER: z.enum(["mock", "smtp"]).default("mock"),
   SMTP_URL: z.string().optional(),

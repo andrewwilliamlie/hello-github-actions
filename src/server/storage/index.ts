@@ -36,10 +36,12 @@ class S3Driver implements StorageDriver {
   readonly name = "s3";
   private client: S3Client;
   private bucket: string;
+  private sse: "AES256" | "aws:kms" | undefined;
   constructor() {
     const e = env();
     if (!e.S3_BUCKET) throw new Error("S3_BUCKET is required for STORAGE_DRIVER=s3");
     this.bucket = e.S3_BUCKET;
+    this.sse = e.S3_SSE === "none" ? undefined : e.S3_SSE;
     this.client = new S3Client({
       region: e.S3_REGION,
       endpoint: e.S3_ENDPOINT,
@@ -48,7 +50,7 @@ class S3Driver implements StorageDriver {
     });
   }
   async put(key: string, body: Buffer, contentType: string) {
-    await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: body, ContentType: contentType, ServerSideEncryption: "AES256" }));
+    await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: body, ContentType: contentType, ServerSideEncryption: this.sse }));
   }
   async get(key: string) {
     const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
