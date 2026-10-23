@@ -62,7 +62,13 @@ export function env(): Env {
   return e;
 }
 
+/**
+ * True when the mock SMS provider may reveal OTP codes in the UI: outside production, or in an
+ * E2E production build that explicitly opts in (requires ALLOW_MOCK_PROVIDERS as well).
+ */
 export function isMockMode(): boolean {
   const e = env();
-  return e.SMS_PROVIDER === "mock" && e.NODE_ENV !== "production";
+  if (e.SMS_PROVIDER !== "mock") return false;
+  if (e.NODE_ENV !== "production") return true;
+  return e.ALLOW_MOCK_PROVIDERS && process.env.E2E_EXPOSE_MOCK_OTP === "true";
 }

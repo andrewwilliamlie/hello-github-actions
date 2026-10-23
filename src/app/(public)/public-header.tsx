@@ -12,10 +12,10 @@ export function PublicHeader({ t, locale }: { t: Dictionary; locale: "id" | "en"
           <span className="hidden text-sm font-extrabold tracking-tight sm:block">HAUSJO AGENT NETWORK</span>
         </Link>
         <nav className="ml-6 hidden gap-6 text-sm font-medium text-sky-100/80 md:flex" aria-label="Navigasi publik">
-          <a href="/#cara-kerja" className="hover:text-white">{t.landing.nav.how}</a>
-          <a href="/#produk" className="hover:text-white">{t.landing.nav.products}</a>
-          <a href="/#penghasilan" className="hover:text-white">{t.landing.nav.earnings}</a>
-          <a href="/#faq" className="hover:text-white">{t.landing.nav.faq}</a>
+          <Link href="/#cara-kerja" className="hover:text-white">{t.landing.nav.how}</Link>
+          <Link href="/#produk" className="hover:text-white">{t.landing.nav.products}</Link>
+          <Link href="/#penghasilan" className="hover:text-white">{t.landing.nav.earnings}</Link>
+          <Link href="/#faq" className="hover:text-white">{t.landing.nav.faq}</Link>
         </nav>
         <div className="ml-auto flex items-center gap-2">
           <LangToggle locale={locale} className="text-white hover:bg-white/10 hover:text-white" />
