@@ -1,0 +1,1370 @@
+// HAUSJO AGENT NETWORK — database schema
+// Conventions:
+//  * Money is stored as BigInt whole Rupiah (IDR has no minor unit in practice). Never Float.
+//  * Percentages are stored as basis points (1% = 100 bps).
+//  * Financial tables (ledger, audit) are append-only; enforced by DB triggers in migrations.
+//  * Soft deletion via `deletedAt` on master data that may be referenced by financial history.
+//  * Status history / attribution history is kept as rows with effective dates, never overwritten.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Identity & access ─────────────────────────────
+
+enum RoleKey {
+  SUPER_ADMIN
+  FINANCE_ADMIN
+  OPERATIONS_ADMIN
+  AGENT
+  MERCHANT
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+model Role {
+  id          String     @id @default(cuid())
+  key         RoleKey    @unique
+  name        String
+  description String
+  users       UserRole[]
+}
+
+model User {
+  id               String     @id @default(cuid())
+  email            String     @unique // stored lower-cased
+  phone            String?    @unique // E.164, e.g. +6281234567890
+  name             String
+  passwordHash     String
+  status           UserStatus @default(ACTIVE)
+  locale           String     @default("id")
+  emailVerifiedAt  DateTime?
+  phoneVerifiedAt  DateTime?
+  mfaSecretEnc     String? // AES-256-GCM encrypted TOTP secret
+  mfaEnabledAt     DateTime?
+  failedLoginCount Int        @default(0)
+  lockedUntil      DateTime?
+  lastLoginAt      DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  deletedAt        DateTime?
+
+  roles         UserRole[]
+  sessions      Session[]
+  agent         Agent?
+  merchant      Merchant?
+  notifications Notification[]
+  consents      Consent[]
+}
+
+model UserRole {
+  userId    String
+  roleId    String
+  grantedAt DateTime @default(now())
+  grantedBy String?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+}
+
+model Session {
+  id          String    @id @default(cuid())
+  tokenHash   String    @unique // SHA-256 of the opaque cookie token
+  userId      String
+  mfaVerified Boolean   @default(false)
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+enum OtpPurpose {
+  REGISTRATION
+  WITHDRAWAL
+  PHONE_CHANGE
+}
+
+model OtpChallenge {
+  id          String     @id @default(cuid())
+  purpose     OtpPurpose
+  destination String // E.164 phone (needed to resend); never logged
+  codeHash    String
+  attempts    Int        @default(0)
+  maxAttempts Int        @default(5)
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  userId      String?
+  createdAt   DateTime   @default(now())
+
+  @@index([destination, purpose, createdAt])
+}
+
+model RateLimitBucket {
+  key         String
+  windowStart DateTime
+  count       Int      @default(0)
+
+  @@id([key, windowStart])
+}
+
+enum ConsentType {
+  TERMS
+  PRIVACY
+  DATA_PROCESSING
+  WHATSAPP
+  MARKETING
+}
+
+model Consent {
+  id          String      @id @default(cuid())
+  userId      String
+  type        ConsentType
+  version     String
+  grantedAt   DateTime    @default(now())
+  withdrawnAt DateTime?
+  ip          String?
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+model ApiClient {
+  id              String    @id @default(cuid())
+  name            String
+  partnerSource   String // transaction `source` this client may write, e.g. "PARTNER_A"
+  keyPrefix       String    @unique
+  keyHash         String    @unique
+  webhookSecretEnc String?
+  scopes          String[]
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  lastUsedAt      DateTime?
+}
+
+// ───────────────────────────── Files ─────────────────────────────
+
+enum FilePurpose {
+  KYC_ID_CARD
+  KYC_SELFIE
+  MERCHANT_DOCUMENT
+  PAYMENT_PROOF
+  PAYOUT_PROOF
+  IMPORT_SOURCE
+  IMPORT_ERROR_REPORT
+  PRODUCT_IMAGE
+}
+
+enum FileClassification {
+  PUBLIC
+  INTERNAL
+  RESTRICTED
+}
+
+enum ScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  NOT_SCANNED // scanner not configured (dev); surfaced in UI
+}
+
+model StoredFile {
+  id             String             @id @default(cuid())
+  purpose        FilePurpose
+  classification FileClassification
+  storageKey     String             @unique
+  originalName   String
+  mimeType       String
+  sizeBytes      Int
+  sha256         String
+  scanStatus     ScanStatus         @default(PENDING)
+  uploadedById   String?
+  ownerAgentId   String? // object-level authorization anchor
+  retentionUntil DateTime?
+  createdAt      DateTime           @default(now())
+  deletedAt      DateTime?
+
+  @@index([ownerAgentId])
+}
+
+// ───────────────────────────── Agents ─────────────────────────────
+
+enum AgentStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  REJECTED
+}
+
+model Agent {
+  id               String      @id @default(cuid())
+  userId           String      @unique
+  agentNumber      Int         @unique @default(autoincrement())
+  agentCode        String      @unique // HJA-000001
+  referralCode     String      @unique // permanent, shareable
+  status           AgentStatus @default(PENDING)
+  fullName         String
+  phone            String
+  email            String
+  addressLine      String
+  city             String
+  province         String
+  postalCode       String?
+  approvedAt       DateTime?
+  approvedById     String?
+  statusReason     String?
+  whatsappOptIn    Boolean     @default(false)
+  whatsappOptInAt  DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  deletedAt        DateTime?
+
+  user              User               @relation(fields: [userId], references: [id])
+  kyc               AgentKYC?
+  agreements        AgentAgreement[]
+  bankAccounts      AgentBankAccount[]
+  wallet            Wallet?
+  referralsMade     AgentReferral[]    @relation("referrer")
+  referralsReceived AgentReferral[]    @relation("recruit")
+  leads             MerchantLead[]
+  attributions      MerchantAttribution[]
+  salesOrders       SalesOrder[]
+  commissionEvents  CommissionEvent[]
+  withdrawals       WithdrawalRequest[]
+
+  @@index([status])
+  @@index([province, city])
+}
+
+enum KycStatus {
+  NOT_SUBMITTED
+  SUBMITTED
+  VERIFIED
+  REJECTED
+}
+
+model AgentKYC {
+  id              String    @id @default(cuid())
+  agentId         String    @unique
+  idType          String    @default("KTP")
+  idNumberEnc     String? // AES-256-GCM
+  idNumberHash    String?   @unique // HMAC blind index for duplicate detection
+  idNumberLast4   String?
+  idCardFileId    String?
+  selfieFileId    String?
+  status          KycStatus @default(NOT_SUBMITTED)
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  reviewedById    String?
+  rejectionReason String?
+  retentionUntil  DateTime?
+  agent           Agent     @relation(fields: [agentId], references: [id])
+}
+
+model AgentAgreement {
+  id               String   @id @default(cuid())
+  agentId          String
+  agreementVersion String
+  agreementHash    String
+  acceptedAt       DateTime @default(now())
+  ip               String?
+  userAgent        String?
+  agent            Agent    @relation(fields: [agentId], references: [id])
+
+  @@unique([agentId, agreementVersion])
+}
+
+enum BankAccountStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
+  ARCHIVED
+}
+
+model AgentBankAccount {
+  id                String            @id @default(cuid())
+  agentId           String
+  bankCode          String
+  bankName          String
+  accountHolderName String
+  accountNumberEnc  String
+  accountNumberHash String // HMAC blind index — shared accounts across agents raise a fraud flag
+  accountNumberLast4 String
+  status            BankAccountStatus @default(PENDING_VERIFICATION)
+  verifiedAt        DateTime?
+  verifiedById      String?
+  rejectionReason   String?
+  createdAt         DateTime          @default(now())
+  agent             Agent             @relation(fields: [agentId], references: [id])
+  withdrawals       WithdrawalRequest[]
+
+  @@index([agentId])
+  @@index([accountNumberHash])
+}
+
+enum ReferralStatus {
+  PENDING // recruit registered, not yet approved
+  APPROVED // recruit approved — referral is live
+  REJECTED // recruit rejected
+  VOID // superseded or voided by privileged action
+}
+
+/// One live referrer per recruit. Changes end the current row (endedAt) and create a new one
+/// via privileged, audited action — never edited in place.
+model AgentReferral {
+  id               String         @id @default(cuid())
+  referrerAgentId  String
+  recruitAgentId   String
+  referralCodeUsed String
+  status           ReferralStatus @default(PENDING)
+  createdAt        DateTime       @default(now())
+  approvedAt       DateTime?
+  endedAt          DateTime?
+  endedReason      String?
+  createdById      String?
+  referrer         Agent          @relation("referrer", fields: [referrerAgentId], references: [id])
+  recruit          Agent          @relation("recruit", fields: [recruitAgentId], references: [id])
+  commissions      ReferralCommission[]
+
+  @@index([referrerAgentId, status])
+  @@index([recruitAgentId])
+}
+
+// ───────────────────────────── Catalog ─────────────────────────────
+
+enum ProductCategory {
+  EDC_ANDROID
+  EDC_MOBILE
+  SOUNDBOX
+}
+
+model Product {
+  id          String          @id @default(cuid())
+  sku         String          @unique
+  name        String
+  slug        String          @unique
+  category    ProductCategory
+  description String
+  specs       Json // [{label, value}]
+  imageUrl    String?
+  isActive    Boolean         @default(true)
+  isDemo      Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  deletedAt   DateTime?
+
+  prices    ProductPrice[]
+  rules     CommissionRule[]
+  devices   Device[]
+  orders    SalesOrder[]
+  leads     MerchantLead[]
+}
+
+model ProductPrice {
+  id            String    @id @default(cuid())
+  productId     String
+  priceIdr      BigInt
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  product       Product   @relation(fields: [productId], references: [id])
+
+  @@index([productId, effectiveFrom])
+}
+
+// ───────────────────────────── Commission rules ─────────────────────────────
+
+enum CommissionType {
+  SALES
+  TRANSACTION_REWARD
+  REFERRAL_SALES
+  REFERRAL_TRANSACTION
+  ADJUSTMENT
+}
+
+enum RuleStatus {
+  DRAFT
+  PENDING_APPROVAL
+  ACTIVE
+  RETIRED
+  REJECTED
+}
+
+/// Versioned rule. A rule "family" is identified by `code`; each change creates a new version.
+/// Commission events snapshot the exact rule version used, so later edits never change history.
+model CommissionRule {
+  id                     String         @id @default(cuid())
+  code                   String
+  version                Int
+  type                   CommissionType
+  status                 RuleStatus     @default(DRAFT)
+  name                   String
+  description            String?
+  productId              String?
+  fixedAmount            BigInt? // SALES and TRANSACTION_REWARD
+  rateBps                Int? // REFERRAL_* (share of recruit's eligible net commission)
+  capAmount              BigInt? // per-event cap
+  conditions             Json           @default("{}") // transactionTypes, sources, merchantIds, excludeMerchantIds, minAmount
+  priority               Int            @default(0)
+  effectiveFrom          DateTime
+  effectiveTo            DateTime?
+  holdDays               Int            @default(0) // refund / fraud review window before eligibility
+  requiresManualApproval Boolean        @default(false)
+  deductFromRecruit      Boolean        @default(false) // referral only; default: referrer paid on top
+  isDemo                 Boolean        @default(false)
+  createdById            String?
+  approvedById           String?
+  approvedAt             DateTime?
+  createdAt              DateTime       @default(now())
+  product                Product?       @relation(fields: [productId], references: [id])
+  events                 CommissionEvent[]
+
+  @@unique([code, version])
+  @@index([type, status, effectiveFrom])
+}
+
+// ───────────────────────────── Merchants ─────────────────────────────
+
+enum LeadStatus {
+  LEAD
+  CONTACTED
+  APPLICATION_SUBMITTED
+  UNDER_REVIEW
+  REVISION_REQUESTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model MerchantLead {
+  id              String     @id @default(cuid())
+  leadNumber      Int        @unique @default(autoincrement())
+  agentId         String
+  businessName    String
+  ownerName       String
+  phone           String // E.164
+  email           String?
+  businessType    String
+  addressLine     String
+  city            String
+  province        String
+  postalCode      String?
+  latitude        Decimal?   @db.Decimal(9, 6)
+  longitude       Decimal?   @db.Decimal(9, 6)
+  productId       String
+  notes           String?
+  status          LeadStatus @default(LEAD)
+  revisionNote    String?
+  rejectionReason String?
+  dedupeKey       String // normalized phone + business name
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  reviewedById    String?
+  merchantId      String?    @unique
+  importRowId     String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletedAt       DateTime?
+
+  agent     Agent              @relation(fields: [agentId], references: [id])
+  product   Product            @relation(fields: [productId], references: [id])
+  merchant  Merchant?          @relation(fields: [merchantId], references: [id])
+  documents MerchantDocument[]
+
+  @@index([agentId, status])
+  @@index([status])
+  @@index([dedupeKey])
+}
+
+enum MerchantStatus {
+  APPROVED
+  PAYMENT_VERIFIED
+  DEVICE_ASSIGNED
+  ACTIVATED
+  COMMISSION_ELIGIBLE
+  SUSPENDED
+  REFUNDED
+  CANCELLED
+}
+
+model Merchant {
+  id             String         @id @default(cuid())
+  merchantNumber Int            @unique @default(autoincrement())
+  merchantCode   String         @unique // HJM-000001 (permanent)
+  businessName   String
+  ownerName      String
+  phone          String
+  email          String?
+  businessType   String
+  addressLine    String
+  city           String
+  province       String
+  postalCode     String?
+  latitude       Decimal?       @db.Decimal(9, 6)
+  longitude      Decimal?       @db.Decimal(9, 6)
+  status         MerchantStatus @default(APPROVED)
+  statusReason   String?
+  dedupeKey      String         @unique
+  processorMid   String?        @unique // merchant id at the payment processor
+  userId         String?        @unique // optional merchant-portal login
+  approvedAt     DateTime       @default(now())
+  approvedById   String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  deletedAt      DateTime?
+
+  user         User?                 @relation(fields: [userId], references: [id])
+  lead         MerchantLead?
+  attributions MerchantAttribution[]
+  documents    MerchantDocument[]
+  orders       SalesOrder[]
+  devices      Device[]
+  transactions Transaction[]
+
+  @@index([status])
+  @@index([province, city])
+}
+
+/// Which agent is credited for a merchant. Exactly one open row (effectiveTo IS NULL) per merchant
+/// (partial unique index in migration). Changes require SUPER_ADMIN approval and are audited.
+model MerchantAttribution {
+  id            String    @id @default(cuid())
+  merchantId    String
+  agentId       String
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  reason        String
+  createdById   String?
+  approvedById  String?
+  createdAt     DateTime  @default(now())
+  merchant      Merchant  @relation(fields: [merchantId], references: [id])
+  agent         Agent     @relation(fields: [agentId], references: [id])
+
+  @@index([merchantId, effectiveFrom])
+  @@index([agentId])
+}
+
+enum MerchantDocumentType {
+  OWNER_ID_CARD
+  NPWP
+  NIB
+  STORE_PHOTO
+  BANK_BOOK
+  OTHER
+}
+
+enum DocumentStatus {
+  UPLOADED
+  VERIFIED
+  REJECTED
+}
+
+model MerchantDocument {
+  id           String               @id @default(cuid())
+  leadId       String
+  merchantId   String?
+  type         MerchantDocumentType
+  fileId       String
+  status       DocumentStatus       @default(UPLOADED)
+  verifiedById String?
+  verifiedAt   DateTime?
+  createdAt    DateTime             @default(now())
+  lead         MerchantLead         @relation(fields: [leadId], references: [id])
+  merchant     Merchant?            @relation(fields: [merchantId], references: [id])
+
+  @@index([leadId])
+}
+
+// ───────────────────────────── Sales, payments, devices ─────────────────────────────
+
+enum OrderStatus {
+  AWAITING_PAYMENT
+  PAYMENT_VERIFIED
+  DEVICE_ASSIGNED
+  ACTIVATED
+  CANCELLED
+  REFUNDED
+}
+
+model SalesOrder {
+  id             String      @id @default(cuid())
+  orderNumber    Int         @unique @default(autoincrement())
+  merchantId     String
+  productId      String
+  sellingAgentId String
+  quantity       Int         @default(1)
+  unitPrice      BigInt // snapshot of ProductPrice at order time
+  totalAmount    BigInt
+  status         OrderStatus @default(AWAITING_PAYMENT)
+  statusReason   String?
+  createdById    String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  merchant   Merchant    @relation(fields: [merchantId], references: [id])
+  product    Product     @relation(fields: [productId], references: [id])
+  agent      Agent       @relation(fields: [sellingAgentId], references: [id])
+  payments   Payment[]
+  device     Device?
+  activation Activation?
+
+  @@index([sellingAgentId, status])
+  @@index([merchantId])
+}
+
+enum PaymentStatus {
+  SUBMITTED
+  VERIFIED
+  REJECTED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  VIRTUAL_ACCOUNT
+  QRIS
+  CASH
+}
+
+model Payment {
+  id           String        @id @default(cuid())
+  orderId      String
+  amount       BigInt
+  method       PaymentMethod
+  reference    String
+  payerName    String?
+  proofFileId  String?
+  status       PaymentStatus @default(SUBMITTED)
+  verifiedById String?
+  verifiedAt   DateTime?
+  refundedAt   DateTime?
+  refundReason String?
+  createdAt    DateTime      @default(now())
+  order        SalesOrder    @relation(fields: [orderId], references: [id])
+
+  @@unique([method, reference])
+  @@index([orderId])
+}
+
+enum DeviceStatus {
+  IN_STOCK
+  ASSIGNED
+  ACTIVE
+  RETURNED
+  FAULTY
+  RETIRED
+}
+
+model Device {
+  id           String       @id @default(cuid())
+  serialNumber String       @unique
+  terminalId   String?      @unique // TID at the processor, set on activation
+  productId    String
+  status       DeviceStatus @default(IN_STOCK)
+  merchantId   String?
+  orderId      String?      @unique
+  isDemo       Boolean      @default(false)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  product      Product             @relation(fields: [productId], references: [id])
+  merchant     Merchant?           @relation(fields: [merchantId], references: [id])
+  order        SalesOrder?         @relation(fields: [orderId], references: [id])
+  movements    InventoryMovement[]
+  activations  Activation[]
+  transactions Transaction[]
+
+  @@index([productId, status])
+}
+
+enum InventoryMovementType {
+  RECEIVED
+  ASSIGNED
+  ACTIVATED
+  RETURNED
+  MARKED_FAULTY
+  RETIRED
+}
+
+model InventoryMovement {
+  id         String                @id @default(cuid())
+  deviceId   String
+  type       InventoryMovementType
+  fromStatus DeviceStatus?
+  toStatus   DeviceStatus
+  orderId    String?
+  merchantId String?
+  note       String?
+  actorId    String?
+  createdAt  DateTime              @default(now())
+  device     Device                @relation(fields: [deviceId], references: [id])
+
+  @@index([deviceId])
+}
+
+model Activation {
+  id            String     @id @default(cuid())
+  orderId       String     @unique
+  deviceId      String
+  merchantId    String
+  terminalId    String
+  activatedAt   DateTime
+  activatedById String?
+  deactivatedAt DateTime?
+  createdAt     DateTime   @default(now())
+  order         SalesOrder @relation(fields: [orderId], references: [id])
+  device        Device     @relation(fields: [deviceId], references: [id])
+
+  @@index([deviceId])
+}
+
+// ───────────────────────────── Transactions & reconciliation ─────────────────────────────
+
+enum TxnStatus {
+  SUCCESS
+  FAILED
+  PENDING
+  REVERSED
+}
+
+enum TxnMatchStatus {
+  MATCHED
+  UNMATCHED
+}
+
+enum TxnRewardStatus {
+  NOT_EVALUATED
+  AWAITING_SETTLEMENT
+  REWARDED
+  INELIGIBLE
+  REVERSED
+}
+
+model Transaction {
+  id               String          @id @default(cuid())
+  source           String // processor / partner code
+  externalId       String // processor transaction id
+  idempotencyKey   String          @unique // `${source}:${externalId}`
+  merchantId       String?
+  deviceId         String?
+  terminalId       String
+  processorMid     String?
+  type             String // PURCHASE, QRIS, REFUND, VOID, ...
+  status           TxnStatus
+  amount           BigInt
+  currency         String          @default("IDR")
+  occurredAt       DateTime
+  businessDate     DateTime        @db.Date // Asia/Jakarta calendar date
+  settlementRef    String?
+  settlementId     String?
+  settledAt        DateTime?
+  isTest           Boolean         @default(false)
+  matchStatus      TxnMatchStatus  @default(UNMATCHED)
+  rewardStatus     TxnRewardStatus @default(NOT_EVALUATED)
+  ineligibleReason String?
+  importId         String?
+  ingestChannel    String // API, WEBHOOK, IMPORT, SEED_DEMO
+  rawPayload       Json?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  merchant   Merchant?   @relation(fields: [merchantId], references: [id])
+  device     Device?     @relation(fields: [deviceId], references: [id])
+  settlement Settlement? @relation(fields: [settlementId], references: [id])
+
+  @@unique([source, externalId])
+  @@index([merchantId, businessDate])
+  @@index([terminalId])
+  @@index([settlementRef])
+  @@index([rewardStatus])
+  @@index([businessDate])
+}
+
+enum SettlementStatus {
+  RECEIVED
+  RECONCILED
+  MISMATCH
+  ACCEPTED_WITH_EXCEPTION
+}
+
+model Settlement {
+  id             String           @id @default(cuid())
+  source         String
+  settlementRef  String
+  settlementDate DateTime         @db.Date
+  expectedCount  Int
+  expectedAmount BigInt
+  matchedCount   Int              @default(0)
+  matchedAmount  BigInt           @default(0)
+  status         SettlementStatus @default(RECEIVED)
+  reconciledAt   DateTime?
+  importId       String?
+  createdAt      DateTime         @default(now())
+  transactions   Transaction[]
+
+  @@unique([source, settlementRef])
+  @@index([settlementDate])
+}
+
+enum ImportType {
+  TRANSACTIONS
+  SETTLEMENTS
+  MERCHANT_LEADS
+  DEVICES
+}
+
+enum ImportStatus {
+  VALIDATED
+  COMMITTING
+  COMMITTED
+  FAILED
+  CANCELLED
+}
+
+model TransactionImport {
+  id                String       @id @default(cuid())
+  type              ImportType
+  source            String?
+  fileId            String
+  fileName          String
+  sha256            String
+  status            ImportStatus @default(VALIDATED)
+  totalRows         Int          @default(0)
+  validRows         Int          @default(0)
+  invalidRows       Int          @default(0)
+  duplicateRows     Int          @default(0)
+  importedRows      Int          @default(0)
+  previousImportId  String? // same file previously imported (idempotent re-import)
+  errorReportFileId String?
+  createdById       String
+  createdAt         DateTime     @default(now())
+  committedAt       DateTime?
+  rows              ImportRow[]
+
+  @@index([sha256, type])
+}
+
+enum ImportRowStatus {
+  VALID
+  INVALID
+  DUPLICATE_IN_FILE
+  DUPLICATE_EXISTING
+  IMPORTED
+  SKIPPED
+}
+
+model ImportRow {
+  id         String            @id @default(cuid())
+  importId   String
+  rowNumber  Int
+  raw        Json
+  normalized Json?
+  status     ImportRowStatus
+  errors     Json              @default("[]")
+  entityId   String?
+  import     TransactionImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@unique([importId, rowNumber])
+  @@index([importId, status])
+}
+
+enum ReconRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model ReconciliationRun {
+  id           String         @id @default(cuid())
+  businessDate DateTime       @db.Date
+  status       ReconRunStatus @default(RUNNING)
+  stats        Json           @default("{}")
+  triggeredBy  String // user id or "scheduler"
+  startedAt    DateTime       @default(now())
+  finishedAt   DateTime?
+  error        String?
+
+  @@index([businessDate])
+}
+
+enum ExceptionType {
+  UNMATCHED_TERMINAL
+  SETTLEMENT_MISMATCH
+  MISSING_SETTLEMENT
+  STATUS_CONFLICT
+  NO_ATTRIBUTION
+  DEVICE_NOT_ACTIVE
+}
+
+enum ExceptionStatus {
+  OPEN
+  RESOLVED
+  IGNORED
+}
+
+model ReconciliationException {
+  id            String          @id @default(cuid())
+  type          ExceptionType
+  status        ExceptionStatus @default(OPEN)
+  transactionId String?
+  settlementId  String?
+  runId         String?
+  details       Json            @default("{}")
+  resolution    String?
+  resolvedById  String?
+  resolvedAt    DateTime?
+  createdAt     DateTime        @default(now())
+
+  @@unique([type, transactionId])
+  @@unique([type, settlementId])
+  @@index([status, type])
+}
+
+// ───────────────────────────── Commissions & ledger ─────────────────────────────
+
+enum CommissionStatus {
+  PENDING // accrued; inside hold / review window
+  ELIGIBLE // hold passed, no fraud flags; awaiting approval if rule requires it
+  APPROVED
+  PAYABLE // moved to payable wallet balance
+  PAID // covered by a confirmed payout
+  REVERSED
+  DISPUTED
+}
+
+/// One row per commissionable business event. `eventRef` is the idempotency key, e.g.
+/// SALE:<orderId>, TXN:<transactionId>, REF:<sourceEventId>. Amount is always > 0; reversals are
+/// recorded as ledger journals and a REVERSED status, never by editing amount.
+model CommissionEvent {
+  id                String           @id @default(cuid())
+  eventRef          String           @unique
+  type              CommissionType
+  status            CommissionStatus @default(PENDING)
+  agentId           String // beneficiary
+  amount            BigInt
+  deductedAmount    BigInt           @default(0) // referral share deducted from this (recruit) event, if configured
+  ruleId            String?
+  ruleCode          String?
+  ruleVersion       Int?
+  ruleSnapshot      Json
+  calculation       Json // human-readable explanation: inputs, rate, formula, result
+  sourceOrderId     String?
+  sourceTransactionId String?
+  sourceEventId     String? // referral → recruit's base event
+  merchantId        String?
+  productId         String?
+  occurredAt        DateTime
+  businessDate      DateTime         @db.Date
+  holdUntil         DateTime
+  eligibleAt        DateTime?
+  approvedAt        DateTime?
+  approvedById      String?
+  payableAt         DateTime?
+  paidAt            DateTime?
+  reversedAt        DateTime?
+  reversalReason    String?
+  disputedAt        DateTime?
+  disputeReason     String?
+  isDemo            Boolean          @default(false)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  agent         Agent                    @relation(fields: [agentId], references: [id])
+  rule          CommissionRule?          @relation(fields: [ruleId], references: [id])
+  ledgerEntries CommissionLedgerEntry[]
+  referralAsBase ReferralCommission?     @relation("baseEvent")
+  referralAsPaid ReferralCommission?     @relation("referralEvent")
+
+  @@unique([type, sourceOrderId])
+  @@unique([type, sourceTransactionId])
+  @@unique([type, sourceEventId])
+  @@index([agentId, status])
+  @@index([agentId, businessDate])
+  @@index([status, holdUntil])
+}
+
+enum LedgerAccount {
+  AGENT_PENDING // liability: accrued, not yet payable
+  AGENT_PAYABLE // liability: withdrawable
+  AGENT_RESERVED // liability: locked in an open withdrawal
+  AGENT_RECEIVABLE // asset: clawback owed by agent after a reversal of paid/withdrawn money
+  COMMISSION_EXPENSE // company expense
+  PAYOUT_CLEARING // company bank / disbursement clearing
+}
+
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+enum JournalKind {
+  ACCRUAL
+  RELEASE
+  REVERSAL
+  WITHDRAWAL_RESERVE
+  WITHDRAWAL_RELEASE
+  PAYOUT
+  CLAWBACK
+  CLAWBACK_RECOVERY
+  ADJUSTMENT
+}
+
+/// Immutable journal header. `journalRef` is unique → posting is idempotent.
+/// A deferred constraint trigger verifies sum(debits) = sum(credits) per journal at commit.
+model LedgerJournal {
+  id          String                  @id @default(cuid())
+  journalRef  String                  @unique
+  kind        JournalKind
+  description String
+  agentId     String?
+  createdById String?
+  createdAt   DateTime                @default(now())
+  entries     CommissionLedgerEntry[]
+
+  @@index([agentId, createdAt])
+}
+
+model CommissionLedgerEntry {
+  id                String          @id @default(cuid())
+  journalId         String
+  account           LedgerAccount
+  agentId           String?
+  direction         LedgerDirection
+  amount            BigInt
+  commissionEventId String?
+  withdrawalId      String?
+  createdAt         DateTime        @default(now())
+  journal           LedgerJournal   @relation(fields: [journalId], references: [id])
+  commissionEvent   CommissionEvent? @relation(fields: [commissionEventId], references: [id])
+
+  @@index([agentId, account])
+  @@index([commissionEventId])
+  @@index([journalId])
+}
+
+model ReferralCommission {
+  id                String          @id @default(cuid())
+  referralId        String
+  referrerAgentId   String
+  recruitAgentId    String
+  baseEventId       String          @unique
+  referralEventId   String          @unique
+  baseAmount        BigInt
+  rateBps           Int
+  amount            BigInt
+  createdAt         DateTime        @default(now())
+  referral          AgentReferral   @relation(fields: [referralId], references: [id])
+  baseEvent         CommissionEvent @relation("baseEvent", fields: [baseEventId], references: [id])
+  referralEvent     CommissionEvent @relation("referralEvent", fields: [referralEventId], references: [id])
+
+  @@index([referrerAgentId])
+}
+
+/// Cached balances, updated in the same DB transaction as ledger postings (row-locked).
+/// CHECK constraints in migration keep every balance >= 0. The ledger is the source of truth;
+/// `verifyWallet` recomputes from entries.
+model Wallet {
+  id                String   @id @default(cuid())
+  agentId           String   @unique
+  pendingBalance    BigInt   @default(0)
+  payableBalance    BigInt   @default(0)
+  reservedBalance   BigInt   @default(0)
+  receivableBalance BigInt   @default(0)
+  paidTotal         BigInt   @default(0)
+  version           Int      @default(0)
+  updatedAt         DateTime @updatedAt
+  agent             Agent    @relation(fields: [agentId], references: [id])
+}
+
+// ───────────────────────────── Withdrawals & payouts ─────────────────────────────
+
+enum WithdrawalStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  CANCELLED
+  IN_BATCH
+  PROCESSING
+  PAID
+  FAILED
+}
+
+model WithdrawalRequest {
+  id               String           @id @default(cuid())
+  withdrawalNumber Int              @unique @default(autoincrement())
+  agentId          String
+  bankAccountId    String
+  amount           BigInt
+  status           WithdrawalStatus @default(REQUESTED)
+  idempotencyKey   String           @unique
+  requestedAt      DateTime         @default(now())
+  reviewedById     String?
+  reviewedAt       DateTime?
+  rejectionReason  String?
+  batchId          String?
+  paidAt           DateTime?
+  failureReason    String?
+  updatedAt        DateTime         @updatedAt
+
+  agent       Agent            @relation(fields: [agentId], references: [id])
+  bankAccount AgentBankAccount @relation(fields: [bankAccountId], references: [id])
+  batch       PayoutBatch?     @relation(fields: [batchId], references: [id])
+  attempts    PayoutAttempt[]
+
+  @@index([agentId, status])
+  @@index([status])
+}
+
+enum PayoutBatchStatus {
+  PENDING_APPROVAL
+  APPROVED
+  PROCESSING
+  COMPLETED
+  PARTIALLY_FAILED
+  CANCELLED
+}
+
+model PayoutBatch {
+  id           String            @id @default(cuid())
+  batchNumber  Int               @unique @default(autoincrement())
+  provider     String            @default("MANUAL_BANK_TRANSFER")
+  status       PayoutBatchStatus @default(PENDING_APPROVAL)
+  totalAmount  BigInt
+  itemCount    Int
+  createdById  String // maker
+  approvedById String? // checker (must differ — DB CHECK)
+  approvedAt   DateTime?
+  completedAt  DateTime?
+  note         String?
+  createdAt    DateTime          @default(now())
+  withdrawals  WithdrawalRequest[]
+  attempts     PayoutAttempt[]
+}
+
+enum PayoutAttemptStatus {
+  PENDING // awaiting manual transfer
+  SUBMITTED // transfer recorded with bank reference + proof; awaiting reconciliation
+  CONFIRMED // reconciled against bank confirmation
+  FAILED
+}
+
+model PayoutAttempt {
+  id                String              @id @default(cuid())
+  withdrawalId      String
+  batchId           String
+  attemptNumber     Int
+  provider          String
+  amount            BigInt
+  status            PayoutAttemptStatus @default(PENDING)
+  providerReference String?
+  proofFileId       String?
+  recordedById      String?
+  recordedAt        DateTime?
+  confirmedById     String?
+  confirmedAt       DateTime?
+  failureReason     String?
+  createdAt         DateTime            @default(now())
+  withdrawal        WithdrawalRequest   @relation(fields: [withdrawalId], references: [id])
+  batch             PayoutBatch         @relation(fields: [batchId], references: [id])
+
+  @@unique([withdrawalId, attemptNumber])
+  @@index([batchId])
+}
+
+// ───────────────────────────── Risk, disputes ─────────────────────────────
+
+enum FraudFlagStatus {
+  OPEN
+  CLEARED
+  CONFIRMED
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model FraudFlag {
+  id            String          @id @default(cuid())
+  type          String // SHARED_BANK_ACCOUNT, DUPLICATE_ID, VELOCITY, SELF_REFERRAL_ATTEMPT, ...
+  severity      Severity
+  status        FraudFlagStatus @default(OPEN)
+  agentId       String?
+  merchantId    String?
+  transactionId String?
+  details       Json            @default("{}")
+  dedupeKey     String          @unique
+  resolvedById  String?
+  resolvedAt    DateTime?
+  resolution    String?
+  createdAt     DateTime        @default(now())
+
+  @@index([status])
+  @@index([agentId, status])
+}
+
+enum DisputeStatus {
+  OPEN
+  RESOLVED
+  REJECTED
+}
+
+model Dispute {
+  id                String        @id @default(cuid())
+  type              String // COMMISSION, TRANSACTION, ATTRIBUTION
+  status            DisputeStatus @default(OPEN)
+  commissionEventId String?
+  merchantId        String?
+  agentId           String?
+  raisedById        String
+  description       String
+  resolution        String?
+  resolvedById      String?
+  resolvedAt        DateTime?
+  createdAt         DateTime      @default(now())
+
+  @@index([status])
+  @@index([agentId])
+}
+
+// ───────────────────────────── Notifications ─────────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+enum DeliveryChannel {
+  EMAIL
+  WHATSAPP
+  SMS
+}
+
+enum DeliveryStatus {
+  QUEUED
+  SENT
+  MOCK_DELIVERED
+  FAILED
+  SKIPPED_NO_CONSENT
+}
+
+model NotificationDelivery {
+  id                String          @id @default(cuid())
+  notificationId    String?
+  userId            String?
+  channel           DeliveryChannel
+  provider          String
+  templateKey       String
+  toMasked          String
+  status            DeliveryStatus  @default(QUEUED)
+  providerMessageId String?
+  error             String?
+  payload           Json            @default("{}") // template variables only — never secrets
+  createdAt         DateTime        @default(now())
+  sentAt            DateTime?
+
+  @@index([status])
+}
+
+// ───────────────────────────── Platform ─────────────────────────────
+
+/// Append-only (DB trigger). Sensitive values are redacted before writing.
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  actorRole   String?
+  action      String
+  entityType  String
+  entityId    String?
+  before      Json?
+  after       Json?
+  metadata    Json     @default("{}")
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+  @@index([createdAt])
+}
+
+model SystemSetting {
+  key         String   @id
+  value       Json
+  description String
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  DEAD
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  type        String
+  payload     Json      @default("{}")
+  status      JobStatus @default(QUEUED)
+  dedupeKey   String?   @unique
+  runAt       DateTime  @default(now())
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  lastError   String?
+  lockedAt    DateTime?
+  lockedBy    String?
+  createdAt   DateTime  @default(now())
+  finishedAt  DateTime?
+
+  @@index([status, runAt])
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  DEAD_LETTER
+}
+
+model WebhookEvent {
+  id              String        @id @default(cuid())
+  provider        String
+  externalEventId String
+  eventType       String
+  signatureValid  Boolean
+  payload         Json
+  status          WebhookStatus @default(RECEIVED)
+  attempts        Int           @default(0)
+  lastError       String?
+  receivedAt      DateTime      @default(now())
+  processedAt     DateTime?
+
+  @@unique([provider, externalEventId])
+  @@index([status])
+}
