@@ -8,6 +8,7 @@ import { validateSalesAmount } from "../commission/engine";
 import { requireDifferentUser, requirePermission, type Actor } from "../rbac";
 import { invalid, notFound, rule as ruleError } from "../errors";
 import { toRupiah } from "@/lib/money";
+import { parseTimestamp } from "./transactions";
 
 export const ruleSchema = z
   .object({
@@ -24,13 +25,24 @@ export const ruleSchema = z
     merchantIds: z.string().optional(),
     excludeMerchantIds: z.string().optional(),
     minTransactionAmount: z.string().optional().or(z.literal("").transform(() => undefined)),
-    priority: z.coerce.number().int().min(-100).max(100).default(0),
-    effectiveFrom: z.coerce.date(),
-    effectiveTo: z.coerce.date().optional().or(z.literal("").transform(() => undefined)),
-    holdDays: z.coerce.number().int().min(0).max(180).default(0),
+    priority: z.union([z.string(), z.number()]).pipe(z.coerce.number().int().min(-100).max(100)).default(0),
+    effectiveFrom: z.union([z.date(), z.string()]).transform((v, ctx) => toWibDate(v, ctx)),
+    effectiveTo: z.union([z.date(), z.string()]).optional().transform((v, ctx) => (v === undefined || v === "" ? undefined : toWibDate(v, ctx))),
+    holdDays: z.union([z.string(), z.number()]).pipe(z.coerce.number().int().min(0).max(180)).default(0),
     requiresManualApproval: z.boolean().default(false),
     deductFromRecruit: z.boolean().default(false),
   });
+/** Dates without an explicit offset (e.g. from datetime-local inputs) are interpreted as Asia/Jakarta. */
+function toWibDate(v: Date | string, ctx: z.RefinementCtx): Date {
+  if (v instanceof Date) return v;
+  const d = parseTimestamp(v.length === 10 ? `${v} 00:00` : v.replace("T", " "));
+  if (!d) {
+    ctx.addIssue({ code: "custom", message: "Tanggal tidak valid" });
+    return new Date(NaN);
+  }
+  return d;
+}
+
 export type RuleInput = z.input<typeof ruleSchema>;
 
 const list = (s?: string) => (s ? s.split(/[,\n]/).map((x) => x.trim()).filter(Boolean) : undefined);

@@ -29,8 +29,8 @@ export const leadSchema = z.object({
   city: z.string().trim().min(2).max(100),
   province: z.string().trim().min(2).max(100),
   postalCode: z.string().trim().regex(/^\d{5}$/).optional().or(z.literal("").transform(() => undefined)),
-  latitude: z.coerce.number().min(-11).max(6).optional().or(z.literal("").transform(() => undefined)),
-  longitude: z.coerce.number().min(95).max(141).optional().or(z.literal("").transform(() => undefined)),
+  latitude: z.preprocess((v) => (v === "" || v === null || v === undefined ? undefined : Number(v)), z.number().min(-11).max(6).optional()),
+  longitude: z.preprocess((v) => (v === "" || v === null || v === undefined ? undefined : Number(v)), z.number().min(95).max(141).optional()),
   productId: z.string().min(1, "Pilih produk"),
   notes: z.string().trim().max(1000).optional(),
 });

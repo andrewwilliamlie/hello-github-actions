@@ -21,7 +21,7 @@ export async function raiseFraudFlag(
   }
 }
 
-/** Open MEDIUM/HIGH flags block commission release for the subjects involved. */
+/** Open MEDIUM/HIGH flags and any CONFIRMED fraud block commission release for the subjects involved. */
 export async function blockingFlagCount(db: Db, s: { agentId?: string | null; merchantId?: string | null; transactionId?: string | null }): Promise<number> {
   const OR = [
     s.agentId ? { agentId: s.agentId } : null,
@@ -29,7 +29,7 @@ export async function blockingFlagCount(db: Db, s: { agentId?: string | null; me
     s.transactionId ? { transactionId: s.transactionId } : null,
   ].filter(Boolean) as object[];
   if (!OR.length) return 0;
-  return db.fraudFlag.count({ where: { status: "OPEN", severity: { in: ["MEDIUM", "HIGH"] }, OR } });
+  return db.fraudFlag.count({ where: { OR: [{ status: "CONFIRMED" }, { status: "OPEN", severity: { in: ["MEDIUM", "HIGH"] } }], AND: [{ OR }] } });
 }
 
 export async function resolveFraudFlag(actor: Actor, flagId: string, outcome: "CLEARED" | "CONFIRMED", resolution: string) {
