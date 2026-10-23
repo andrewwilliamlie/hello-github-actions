@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --background: 216 33% 97%;
+    --foreground: 222 62% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 62% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 62% 12%;
+    --primary: 222 70% 20%; /* Hausjo navy */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 100% 96%; /* light blue */
+    --secondary-foreground: 222 70% 20%;
+    --muted: 214 32% 94%;
+    --muted-foreground: 220 15% 40%;
+    --accent: 208 100% 94%;
+    --accent-foreground: 222 70% 20%;
+    --destructive: 2 75% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 70% 28%;
+    --success-foreground: 0 0% 100%;
+    --warning: 35 100% 32%;
+    --warning-foreground: 0 0% 100%;
+    --border: 216 25% 88%;
+    --input: 216 25% 84%;
+    --ring: 210 100% 56%;
+    --radius: 0.75rem;
+    --font-sans: "Plus Jakarta Sans";
+    --font-mono: "JetBrains Mono";
+    /* Chart roles (validated reference categorical slots + ordinal blue ramp) */
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --grid: #e3e8f0;
+  }
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground antialiased; font-feature-settings: "tnum" 0; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  :focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: white; }
+}
+
+.receipt {
+  background: #fffdf5;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  -webkit-mask: radial-gradient(circle 6px at 50% 100%, #0000 98%, #000) 50% 100% / 14px 100% repeat-x;
+  mask: radial-gradient(circle 6px at 50% 100%, #0000 98%, #000) 50% 100% / 14px 100% repeat-x;
+}

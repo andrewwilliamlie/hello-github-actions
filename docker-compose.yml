@@ -1,0 +1,94 @@
+# Local development stack.
+#   Infrastructure only (run the app with `npm run dev`):   docker compose up -d db minio
+#   Full stack in containers:                              docker compose --profile app up -d --build
+#   Optional malware scanner:                              docker compose --profile clamav up -d clamav
+# Credentials below are LOCAL DEVELOPMENT ONLY.
+name: hausjo
+
+x-app-env: &app-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://hausjo:hausjo@db:5432/hausjo?schema=public
+  APP_URL: ${APP_URL:-http://localhost:3000}
+  FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?set FIELD_ENCRYPTION_KEY in .env}
+  BLIND_INDEX_KEY: ${BLIND_INDEX_KEY:?set BLIND_INDEX_KEY in .env}
+  OTP_PEPPER: ${OTP_PEPPER:?set OTP_PEPPER in .env}
+  STORAGE_DRIVER: s3
+  S3_ENDPOINT: http://minio:9000
+  S3_REGION: ap-southeast-3
+  S3_BUCKET: hausjo-files
+  S3_ACCESS_KEY_ID: hausjo
+  S3_SECRET_ACCESS_KEY: hausjo-dev-secret
+  S3_FORCE_PATH_STYLE: "true"
+  S3_SSE: none # local MinIO has no KMS; keep AES256 (default) on AWS S3
+  SECURE_COOKIES: "false" # plain http on localhost; use "true"/auto behind HTTPS
+  ADMIN_MFA_REQUIRED: "true"
+  SMS_PROVIDER: mock
+  EMAIL_PROVIDER: mock
+  WHATSAPP_PROVIDER: mock
+  MALWARE_SCANNER: ${MALWARE_SCANNER:-none}
+  CLAMAV_HOST: clamav
+  ALLOW_MOCK_PROVIDERS: "true" # local stack only — mocks are refused in real production
+  DEMO_MODE: ${DEMO_MODE:-true}
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hausjo
+      POSTGRES_PASSWORD: hausjo
+      POSTGRES_DB: hausjo
+      TZ: Asia/Jakarta
+    ports: ["5432:5432"]
+    volumes: [db-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hausjo -d hausjo"]
+      interval: 5s
+      retries: 20
+
+  # MinIO server (S3-compatible). Bitnami's archived image creates the private bucket on start.
+  minio:
+    image: bitnamilegacy/minio:2025.4.22
+    environment:
+      MINIO_ROOT_USER: hausjo
+      MINIO_ROOT_PASSWORD: hausjo-dev-secret
+      MINIO_DEFAULT_BUCKETS: hausjo-files
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [minio-data:/bitnami/minio/data]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      retries: 20
+
+  clamav:
+    image: clamav/clamav:1.4
+    profiles: ["clamav"]
+    ports: ["3310:3310"]
+
+  migrate:
+    build: .
+    profiles: ["app"]
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment: *app-env
+    depends_on: { db: { condition: service_healthy } }
+
+  web:
+    build: .
+    profiles: ["app"]
+    environment: *app-env
+    ports: ["3000:3000"]
+    depends_on:
+      db: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    build: .
+    profiles: ["app"]
+    command: ["npm", "run", "worker"]
+    environment: *app-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+volumes:
+  db-data:
+  minio-data:

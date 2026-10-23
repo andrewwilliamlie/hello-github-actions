@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="A920 Pro">
+<rect width="200" height="200" rx="24" fill="#eef7ff"/>
+<rect x="60" y="30" width="80" height="140" rx="12" fill="#163273"/>
+<rect x="68" y="40" width="64" height="58" rx="5" fill="#8ecdff"/>
+<rect x="68" y="104" width="64" height="56" rx="4" fill="#163273"/>
+<rect x="72" y="110" width="14" height="8" rx="2" fill="#59b0ff" opacity=".7"/><rect x="90" y="110" width="14" height="8" rx="2" fill="#59b0ff" opacity=".7"/><rect x="108" y="110" width="14" height="8" rx="2" fill="#59b0ff" opacity=".7"/><rect x="72" y="122" width="14" height="8" rx="2" fill="#59b0ff" opacity=".7"/><rect x="90" y="122" width="14" height="8" rx="2" fill="#59b0ff" opacity=".7"/><rect x="108" y="122" width="14" height="8" rx="2" fill="#59b0ff" opacity=".7"/><rect x="72" y="134" width="14" height="8" rx="2" fill="#59b0ff" opacity=".7"/><rect x="90" y="134" width="14" height="8" rx="2" fill="#59b0ff" opacity=".7"/><rect x="108" y="134" width="14" height="8" rx="2" fill="#59b0ff" opacity=".7"/>
+<text x="100" y="188" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="700" fill="#10265a">A920 Pro</text></svg>
